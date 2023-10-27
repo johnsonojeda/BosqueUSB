@@ -1,0 +1,164 @@
+---
+title: "Bosque USB"
+output: pdf_document
+---
+
+### EFFECT OF IRRADIANCE ON STEM DIAMETER GROWTH ($\Delta$ SD)
+
+To determine the effect of irradiance treatment on stem diameter growth, we employed a *mixed model for repeated measures*. These models allow for explanatory variables with both fixed (i.e. experimental/repeatable) and random effects (i.e. stochastic) to be included while accounting for lack of independence between measurements (Bolker 2008, Mangiafico 2015).
+
+We chose to use mixed models for our analyses for several reasons:
+
+1) To account for temporal autocorrelation since stem diameter (SD) was measured repeatedly for each individual over census years. 
+
+2) Mixed models allows for "imbalanced" and incomplete sampling. Meaning that individuals who may have not been measured at a given census are not removed from the model as would happen if using a repeated measures ANOVA. This is important since SD measurements of individual trees may be missing because they were either new, died, or were not found during a sampling season.
+
+### MODELING 
+
+We took a two-step modeling approach to determine the effect of irradiance on SD growth. 
+
+First, we built a global model considering growth of all individuals regardless of species (global model). Then we models modeled individual growth considering growth per species (individual model). 
+
+```{r, data_upload, echo = F, message = F, warning= F, include = F}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+tree <- as_tibble(read.csv("data/DatosNuevos/SD_and_Height.csv", header = T)) %>% 
+  dplyr::select(ID, Quad, Spp, YEAR, TREAT, SD) %>% 
+  dplyr::mutate(TREAT = factor(TREAT, levels = c("Control", "Clear")),
+                Quad = as.factor(Quad))%>%arrange(ID)
+  
+str(tree)
+```
+
+
+```{r, echo = F, message= F, warning= F, include = F}
+##Completing cases for years where individuals were not measured
+
+#Creating a years vector 
+YEAR <- c(2008:2011)
+
+#Creating a new dataframe where individuals have an entry for each census year
+new_df<- tree %>% dplyr::select(-YEAR, -SD) %>% distinct()%>% 
+  slice(rep(1:n(), each = length(YEAR))) 
+
+new_df <- as_tibble(cbind(new_df, YEAR))
+
+#Joining dataframes so years not measured have NA values per each individual 
+tree_df <- full_join(tree, new_df) %>% arrange(ID, YEAR)
+
+#Exporting full dataframe with NA values
+write.csv(tree_df, "data/DatosNuevos/SD_and_Height_FullDf.csv")
+```
+
+#### Global model
+
+We built mixed model for repeated measures to explain growth of all seedlings under different irradiance treatments, regardless of species. 
+
+The global model was built via the `nmle` R package and was formulated as follows: 
+
+$SD \sim Treamtent + (1|Individual) + (1|Quadrant)$ 
+
+Where:  
+_Dependent variable_: Stem Diameter (SD) 
+
+_Fixed effects_: Treatment (clear, control), Year, Treatment:Year (interaction), 
+Quadrant (to account for proximity to native forest)
+
+_Random effects_: Individual (ID, to account for repeated measurements for each individual sapling).
+
+```{r, glob-SD-plot, echo = F, message= F, warning=F}
+library(dplyr)
+library(ggplot2)
+
+tree_df <- tree_df %>% mutate(YEAR = as.factor(YEAR))
+ggplot() + geom_boxplot(data = tree_df, aes(x = YEAR, y = SD, fill = TREAT)) +
+  ylab("Stem diameter (cm)") + xlab("Census year") +
+  scale_fill_discrete(name = "Treatment")
+  
+```
+
+```{r, glob_mod_sel, echo = F, warning = F , message = F} 
+library(lme4)
+library(lmerTest)
+#Fitting a model with all variables (global model)
+growth_mm_full <- lmer(SD ~ TREAT*YEAR + Quad + (1 | ID),  tree_df)
+```
+
+```{r, echo = F, warning= F, message= F}
+summary(growth_mm_full)
+```
+
+Clearing treatment, year and their interaction had a significant effect (though small, as evidenced in magnitude of positive coefficients) on Stem diameter growth. Clearing had a positive relationship with stem diameter growth. As expected, year also had a positive relationship with growth. 
+
+We also check for normality in the model residuals to make sure modeling assumptions are met.
+
+```{r, mod-assump1,echo = F, message= F, warning= F}
+library(ggplot2)
+dat_vis1 <- data.frame(predicted= predict(growth_mm_full),
+                     residual = residuals(growth_mm_full))
+```
+
+```{r, echo = T, warning= F, message= F}
+qqnorm(dat_vis1$residual)
+qqline(dat_vis1$residual)
+```
+
+Looks good. 
+
+
+**b)  Individual models**
+
+We would expect different species to have different intrinsic growth rates (i.e. fast-growing vs. slow-growing) and to greatly influence average SD. Therefore, to adequately tease apart the effects of clearing treatments on native tree growth we built mixed effects models for each individual species. 
+
+Following a similar procedure to the global model, we first built a  model via the `lme4` package formulated as follows: 
+
+${SD} \sim TREAT*Year + Species + (1|ID) $
+
+Note that linear models in `R` code categorical (factor) variables (such as species) as a set of *n-1* dummy variables, where *n* is the total number of levels the categorical variable has. Each dummy variable is binary and is compared in reference to a "control" variable. In cases where the reference level or control group is not specified, the first factor level (in alphabetical order) is automatically considered the reference group. In this case, *Cecropia sp.* is the reference level, acting as the intercept. 
+
+```{r, indiv-SD-plot, echo = F, message= F, warning=F}
+library(dplyr)
+library(ggplot2)
+
+tree_df <- tree_df %>% mutate(YEAR = as.factor(YEAR))
+ggplot() + geom_boxplot(data = tree_df, aes(x = YEAR, y = SD, fill = TREAT)) +
+  ylab("Stem diameter (cm)") + xlab("Census year") +
+  scale_fill_discrete(name = "Treatment") + 
+  facet_wrap(~ Spp, ncol = 3)
+  
+```
+
+```{r, indv_mod, echo = F, collapse= FALSE, message = F, warning = F} 
+library(lme4)
+library(lmerTest)
+#Fitting a model with all variables (global model)
+growth_mm_spp <- lmer(SD ~ TREAT*YEAR + TREAT*Spp + (1 | ID),  tree_df)
+
+summary(growth_mm_spp)
+```
+
+Checking that modeling assumptions are met: 
+```{r, mod-assump2,echo = F , message = F, warning= F, include= F}
+library(ggplot2)
+dat_vis2 <- data.frame(predicted= predict(growth_mm_spp),
+                     residual = residuals(growth_mm_spp))
+```
+
+```{r, message=F, warning= F, echo= F}
+qqnorm(dat_vis2$residual)
+qqline(dat_vis2$residual)
+```
+
+SD response to clearing treatment varied across species, though this difference was only significant for *Ocotea sp.*. SD for all species was generally slightly smaller relative to *Cecropia sp.*, except for *Clusia sp.* whose SD was slightly higher. 
+
+Clearing treatment had a significant effect on SD growth for *Croton sp.* and  *Roupala sp.*, both with 
+
+*Croton c.* is considered a pioneer native montane forest species, and thus we would expect to observe high growth rates during initial successional stages, especially where competition may be reduced (i.e. cleared plots). However, it only seemed to be marginally influenced by clearing treatment. 
+
+Clearing treatment had a significant effect yet slightly negative effect on SD growht for *Croton sp.* and *Roupala* when compared to *Cecropia*. Years since clearing had a slightly positive and significant effect on SD. Though SD is expected to increase over time, however we note that the interaction between years and clearing had a slighly negative effect on *Cecropia* (the reference level) SD. This could be explained because
+*Cecropia sp.* is a species that is usually associated with forest edges and transition zones (ecotones), and thus should be absent in areas where pine trees are present. On the other hand, *Roupala sp.* is a characteristic species of Neotropical montane forests, which could partially explain why it is less likely to grow in absence of pine trees, since there may be a threshold shade requirement for this species.
+
+
+This could be due to massive die-off of early pioneer or transitional species (e.g. *Cecropia sp.*) and/or interactions with clearing treatment that were not accounted for in this study.
